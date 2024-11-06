@@ -2,8 +2,8 @@
 
 # Variables
 ZONE="us-central1-f"
-DISK_NAME1="instance--120034"
-# DISK_NAME2="instance--051856"
+DISK_NAME1="instance-20241106-043252"
+DISK_NAME2="disk-2"
 
 # Function to calculate new disk size (current size + 10%)
 calculate_new_size() {
@@ -28,10 +28,10 @@ resize_disk() {
     # Determine the appropriate device for the specified path
     device=$(df --output=source "$path" | tail -1)
     disk_usage=$(df -h "$path" | awk 'NR==2{print $5}' | tr -d '%')  # Disk usage percentage without %
-    
-    # Get current disk size in GB
-    current_size=$(lsblk -b -o SIZE -n -d "${device%[0-9]*}" | awk '{print int($1/1024/1024/1024)}')
 
+    # Get current disk size from gcloud
+    current_size=$(gcloud compute disks describe "$disk_name" --zone "$ZONE" --format="value(sizeGb)")
+    
     echo "Checking $path usage: ${disk_usage}% (Current size: ${current_size}GB, Filesystem: $filesystem)"
 
     # Check if usage is above 80%
@@ -48,12 +48,16 @@ resize_disk() {
         # Resize the disk
         echo "Usage above 80% on $path. Resizing disk to ${new_size}GB..."
         gcloud compute disks resize "$disk_name" --size="${new_size}"GB --zone="$ZONE" --quiet
-        
         echo "Disk resized to ${new_size}GB."
         
         # Resize filesystem
         if [ "$filesystem" == "ext4" ]; then
-            sudo growpart "${device%[0-9]*}" "${device##*/dev/sda}" 
+            # Get the base device name and partition number
+            disk_root=$(lsblk -o NAME,FSTYPE,MOUNTPOINT|grep -w "/" | awk '{print $1}' | tr -d ├─ | cut -d "p" -f2)
+            base_device="${disk_root%%[0-9]*}"
+            partition="${disk_root##*[^0-9]}"
+
+            sudo growpart "/dev/$base_device" "$partition"
             sudo resize2fs "$device"
         elif [ "$filesystem" == "xfs" ]; then
             sudo xfs_growfs "$path"
@@ -66,4 +70,4 @@ resize_disk() {
 # Check and resize disks for /
 resize_disk / "$DISK_NAME1" "ext4"
 # Uncomment the next line if you want to check and resize /data as well
-# resize_disk /data "$DISK_NAME2" "xfs"
+resize_disk /data "$DISK_NAME2" "xfs"
